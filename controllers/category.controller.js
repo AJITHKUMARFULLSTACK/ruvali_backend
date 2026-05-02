@@ -1,17 +1,29 @@
-const multer = require('multer');
+const fs = require('fs');
 const { asyncHandler } = require('../utils/asyncHandler');
 const {
   listCategoriesForStore,
+  getCategoryForStore,
   createCategoryForStore,
   updateCategoryForStore,
   deleteCategoryForStore,
-  reorderCategoriesForStore
+  reorderCategoriesForStore,
 } = require('../services/category.service');
-const { uploadBufferToUrl } = require('./upload.controller');
+const { categoryBannerUpload } = require('../middlewares/categoryBannerMulter');
+const {
+  enrichCategoryForApi,
+  toPublicCategoryBannerUrl,
+  deleteCategoryBannerIfExists,
+} = require('../utils/fileUrl');
 const { HttpError } = require('../utils/httpError');
 
-const upload = multer({ storage: multer.memoryStorage() });
-const bannerUpload = upload.single('banner');
+function unlinkQuiet(absPath) {
+  if (!absPath || typeof absPath !== 'string') return;
+  try {
+    if (fs.existsSync(absPath)) fs.unlinkSync(absPath);
+  } catch {
+    //
+  }
+}
 
 function toSlug(name) {
   return (name || '')
@@ -20,39 +32,39 @@ function toSlug(name) {
     .replace(/[^a-z0-9-]/g, '');
 }
 
-// Public: list by store slug (requireStore). Returns id, name, slug, bannerImage (+ parentId, children for tree)
 const listPublic = asyncHandler(async (req, res) => {
   const cats = await listCategoriesForStore(req.store.id);
-  const withSlug = cats.map((c) => ({
-    ...c,
-    slug: c.slug || toSlug(c.name)
-  }));
+  const withSlug = cats.map((c) =>
+    enrichCategoryForApi({
+      ...c,
+      slug: c.slug || toSlug(c.name),
+    })
+  );
 
   console.log('[CATEGORIES:listPublic]', {
     storeId: req.store.id,
     storeSlug: req.store.slug,
-    count: withSlug.length
+    count: withSlug.length,
   });
 
   res.json(withSlug);
 });
 
-// Admin: list by admin's store
 const listAdmin = asyncHandler(async (req, res) => {
   const cats = await listCategoriesForStore(req.adminUser.storeId);
+  const out = cats.map((c) => enrichCategoryForApi(c));
 
   console.log('[CATEGORIES:listAdmin]', {
     storeId: req.adminUser.storeId,
-    count: cats.length
+    count: out.length,
   });
 
-  res.json(cats);
+  res.json(out);
 });
 
 const create = asyncHandler(async (req, res) => {
   const body = req.body || {};
   if (!body.name || typeof body.name !== 'string' || !body.name.trim()) {
-    const { HttpError } = require('../utils/httpError');
     throw new HttpError(400, 'Category name is required');
   }
   const cat = await createCategoryForStore(req.adminUser.storeId, body);
@@ -60,22 +72,19 @@ const create = asyncHandler(async (req, res) => {
   console.log('[CATEGORIES:create]', {
     storeId: req.adminUser.storeId,
     categoryId: cat.id,
-    name: cat.name
+    name: cat.name,
   });
 
-  res.status(201).json(cat);
+  res.status(201).json(enrichCategoryForApi(cat));
 });
 
 const update = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const storeId = req.adminUser?.storeId;
-  if (!storeId) {
-    const { HttpError } = require('../utils/httpError');
-    throw new HttpError(401, 'Admin store not found');
-  }
+  if (!storeId) throw new HttpError(401, 'Admin store not found');
   console.log('[CATEGORIES:update]', { categoryId: id, storeId, body: req.body });
   const cat = await updateCategoryForStore(storeId, id, req.body);
-  res.json(cat);
+  res.json(enrichCategoryForApi(cat));
 });
 
 const remove = asyncHandler(async (req, res) => {
@@ -90,25 +99,43 @@ const reorder = asyncHandler(async (req, res) => {
     throw new HttpError(400, 'order must be a non-empty array of category IDs');
   }
   const cats = await reorderCategoriesForStore(req.adminUser.storeId, order);
-  res.json(cats);
+  res.json(cats.map((c) => enrichCategoryForApi(c)));
 });
 
 const updateBanner = [
-  bannerUpload,
+  categoryBannerUpload,
   asyncHandler(async (req, res) => {
-    const { id } = req.params;
+    const { id: categoryId } = req.params;
     if (!req.file) throw new HttpError(400, 'No banner image provided (field: banner)');
     const storeId = req.adminUser?.storeId;
     if (!storeId) throw new HttpError(401, 'Admin store not found');
-    const url = await uploadBufferToUrl({
-      buffer: req.file.buffer,
-      originalname: req.file.originalname,
-      storeId
-    });
-    const cat = await updateCategoryForStore(storeId, id, { bannerImage: url });
-    res.json(cat);
-  })
+
+    const diskPath = req.file.path;
+    const bannerRelative = toPublicCategoryBannerUrl(req.file.filename);
+
+    const existing = await getCategoryForStore(storeId, categoryId);
+    if (!existing) {
+      unlinkQuiet(diskPath);
+      throw new HttpError(404, 'Category not found');
+    }
+
+    const previousBanner = existing.bannerImage || null;
+
+    try {
+      const updated = await updateCategoryForStore(storeId, categoryId, {
+        bannerImage: bannerRelative,
+      });
+
+      if (previousBanner && previousBanner !== bannerRelative) {
+        deleteCategoryBannerIfExists(previousBanner);
+      }
+
+      res.json(enrichCategoryForApi(updated));
+    } catch (err) {
+      unlinkQuiet(diskPath);
+      throw err;
+    }
+  }),
 ];
 
 module.exports = { listPublic, listAdmin, create, update, remove, reorder, updateBanner };
-

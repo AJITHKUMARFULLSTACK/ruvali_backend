@@ -1,9 +1,24 @@
 const fs = require('fs');
-const { getProductUploadsDir } = require('../utils/fileUrl');
+const {
+  getProductUploadsDir,
+  getCategoryUploadsDir,
+} = require('../utils/fileUrl');
 
 function ensureProductUploadsDir() {
-  const dir = getProductUploadsDir();
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(getProductUploadsDir(), { recursive: true });
 }
 
-module.exports = { ensureProductUploadsDir };
+function ensureCategoryUploadsDir() {
+  fs.mkdirSync(getCategoryUploadsDir(), { recursive: true });
+}
+
+function ensureUploadDirs() {
+  ensureProductUploadsDir();
+  ensureCategoryUploadsDir();
+}
+
+module.exports = {
+  ensureProductUploadsDir,
+  ensureCategoryUploadsDir,
+  ensureUploadDirs,
+};

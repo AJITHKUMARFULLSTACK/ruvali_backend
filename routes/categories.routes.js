@@ -2,6 +2,7 @@ const express = require('express');
 const { listPublic, listAdmin, create, update, remove, reorder, updateBanner } = require('../controllers/category.controller');
 const { requireStore } = require('../middlewares/requireStore');
 const { authAdmin } = require('../middlewares/authAdmin');
+const { requireAdminStoreSlug } = require('../middlewares/requireAdminStoreSlug');
 
 const router = express.Router();
 
@@ -17,8 +18,9 @@ router.post('/', authAdmin, create);
 // Admin: PUT /api/categories/reorder
 router.put('/reorder', authAdmin, reorder);
 
-// Admin: PUT /api/categories/:id/banner (upload & save banner image)
-router.put('/:id/banner', authAdmin, updateBanner);
+// Admin: upload category banner (multer — local disk under public/uploads/categories)
+router.put('/:id/banner', authAdmin, requireAdminStoreSlug, ...updateBanner);
+router.post('/:id/banner', authAdmin, requireAdminStoreSlug, ...updateBanner);
 
 // Admin: PUT /api/categories/:id
 router.put('/:id', authAdmin, update);
@@ -27,4 +29,3 @@ router.put('/:id', authAdmin, update);
 router.delete('/:id', authAdmin, remove);
 
 module.exports = router;
-

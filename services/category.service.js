@@ -1,12 +1,21 @@
 const { randomUUID } = require('crypto');
 const { query } = require('../config/db');
 const { HttpError } = require('../utils/httpError');
+const { deleteCategoryBannerIfExists } = require('../utils/fileUrl');
 
 async function listCategoriesForStore(storeId) {
   return query(
     `SELECT * FROM categories WHERE storeId = ? ORDER BY sortOrder ASC, name ASC`,
     [storeId]
   );
+}
+
+async function getCategoryForStore(storeId, categoryId) {
+  const rows = await query(
+    'SELECT * FROM categories WHERE id = ? AND storeId = ? LIMIT 1',
+    [categoryId, storeId]
+  );
+  return rows[0] || null;
 }
 
 async function createCategoryForStore(storeId, payload) {
@@ -54,11 +63,12 @@ async function updateCategoryForStore(storeId, categoryId, payload) {
 
 async function deleteCategoryForStore(storeId, categoryId) {
   const existingRows = await query(
-    'SELECT id FROM categories WHERE id = ? AND storeId = ? LIMIT 1',
+    'SELECT id, bannerImage FROM categories WHERE id = ? AND storeId = ? LIMIT 1',
     [categoryId, storeId]
   );
   const existing = existingRows[0];
   if (!existing) throw new HttpError(404, 'Category not found');
+  const bannerImage = existing.bannerImage || null;
   const productCountRows = await query(
     'SELECT COUNT(*) AS count FROM products WHERE categoryId = ?',
     [categoryId]
@@ -76,6 +86,7 @@ async function deleteCategoryForStore(storeId, categoryId) {
     throw new HttpError(400, 'Cannot delete: this category has subcategories. Delete subcategories first.');
   }
   await query('DELETE FROM categories WHERE id = ?', [categoryId]);
+  deleteCategoryBannerIfExists(bannerImage);
   return { deleted: true };
 }
 
@@ -97,9 +108,9 @@ async function reorderCategoriesForStore(storeId, categoryIds) {
 
 module.exports = {
   listCategoriesForStore,
+  getCategoryForStore,
   createCategoryForStore,
   updateCategoryForStore,
   deleteCategoryForStore,
-  reorderCategoriesForStore
+  reorderCategoriesForStore,
 };
-

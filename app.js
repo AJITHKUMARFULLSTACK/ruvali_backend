@@ -4,7 +4,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 const { env } = require('./config/env');
-const { ensureProductUploadsDir } = require('./config/uploads');
+const { ensureUploadDirs } = require('./config/uploads');
 const { initWhatsApp } = require('./services/whatsapp.service');
 const { requestLogger } = require('./middlewares/requestLogger');
 const { errorHandler } = require('./middlewares/errorHandler');
@@ -22,7 +22,7 @@ const systemRoutes = require('./routes/system.routes');
 
 const app = express();
 
-ensureProductUploadsDir();
+ensureUploadDirs();
 
 // Build allowed origins: from CORS_ORIGINS, always include localhost:3000 in development
 const corsOrigins = [...env.corsOrigins];
