@@ -1,5 +1,5 @@
 const express = require('express');
-const { login } = require('../controllers/admin.controller');
+const { login, me } = require('../controllers/admin.controller');
 const { authAdmin } = require('../middlewares/authAdmin');
 const { loginLimiter } = require('../middlewares/rateLimiter');
 const { env } = require('../config/env');
@@ -13,6 +13,8 @@ const {
 const router = express.Router();
 
 router.post('/login', loginLimiter, login); // POST /api/admin/login
+
+router.get('/me', authAdmin, me);
 
 router.get('/whatsapp/status', authAdmin, (req, res) => {
   const enabled = env.whatsapp.enabled;

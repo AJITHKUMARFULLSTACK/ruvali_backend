@@ -7,5 +7,17 @@ const login = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
-module.exports = { login };
+/** Current admin (JWT verified by authAdmin middleware). */
+const me = asyncHandler(async (req, res) => {
+  const { id, email, storeId } = req.adminUser;
+  res.json({
+    admin: {
+      id,
+      email,
+      storeId,
+    },
+  });
+});
+
+module.exports = { login, me };
 
