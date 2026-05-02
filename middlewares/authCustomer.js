@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { prisma } = require('../config/prisma');
+const { query } = require('../config/db');
 const { env } = require('../config/env');
 const { HttpError } = require('../utils/httpError');
 
@@ -22,9 +22,8 @@ async function authCustomer(req, res, next) {
       return res.status(401).json({ error: { message: 'Invalid or expired token' } });
     }
 
-    const customer = await prisma.customer.findUnique({
-      where: { id: decoded.customerId }
-    });
+    const rows = await query('SELECT * FROM customers WHERE id = ? LIMIT 1', [decoded.customerId]);
+    const customer = rows[0];
 
     if (!customer || customer.storeId !== req.store?.id) {
       return res.status(401).json({ error: { message: 'Authentication required' } });

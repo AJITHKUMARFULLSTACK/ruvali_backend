@@ -1,4 +1,5 @@
-const { prisma } = require('../config/prisma');
+const { randomUUID } = require('crypto');
+const { query, withTransaction } = require('../config/db');
 const { env } = require('../config/env');
 const { HttpError } = require('../utils/httpError');
 const { ORDER_STATUSES, canTransition } = require('../utils/status');
@@ -15,9 +16,11 @@ async function createOrderForStore(store, payload) {
 
   // Fetch products and validate stock BEFORE starting transaction
   const productIds = payload.items.map((i) => i.productId);
-  const products = await prisma.product.findMany({
-    where: { id: { in: productIds }, storeId: store.id }
-  });
+  const products = await query(
+    `SELECT * FROM products 
+     WHERE storeId = ? AND id IN (${productIds.map(() => '?').join(', ')})`,
+    [store.id, ...productIds]
+  );
   if (products.length !== productIds.length) {
     throw new HttpError(400, 'One or more products not found for this store');
   }
@@ -38,19 +41,21 @@ async function createOrderForStore(store, payload) {
     }
   }
 
-  return prisma.$transaction(async (tx) => {
-    let customer = await tx.customer.findFirst({
-      where: { storeId: store.id, phone: payload.customer.phone }
-    });
+  return withTransaction(async (conn) => {
+    const [customerRows] = await conn.execute(
+      'SELECT * FROM customers WHERE storeId = ? AND phone = ? LIMIT 1',
+      [store.id, payload.customer.phone]
+    );
+    let customer = customerRows[0];
 
     if (!customer) {
-      customer = await tx.customer.create({
-        data: {
-          storeId: store.id,
-          name: payload.customer.name,
-          phone: payload.customer.phone
-        }
-      });
+      const customerId = randomUUID();
+      await conn.execute(
+        `INSERT INTO customers (id, storeId, name, phone) VALUES (?, ?, ?, ?)`,
+        [customerId, store.id, payload.customer.name, payload.customer.phone]
+      );
+      const [createdRows] = await conn.execute('SELECT * FROM customers WHERE id = ? LIMIT 1', [customerId]);
+      customer = createdRows[0];
     }
 
     const itemsData = [];
@@ -71,42 +76,45 @@ async function createOrderForStore(store, payload) {
 
     const totalWithShipping = totalAmount + shippingAmount;
 
-    const order = await tx.order.create({
-      data: {
-        storeId: store.id,
-        customerId: customer.id,
-        totalAmount: totalWithShipping,
+    const orderId = randomUUID();
+    await conn.execute(
+      `INSERT INTO orders (
+        id, storeId, customerId, totalAmount, shippingAmount,
+        shippingInfo, status, paymentId, paymentStatus
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        orderId,
+        store.id,
+        customer.id,
+        totalWithShipping,
         shippingAmount,
-        shippingInfo: payload.shippingInfo || null,
-        status: 'PLACED',
-        paymentId: payload.paymentId ?? null,
-        paymentStatus: payload.paymentStatus ?? 'PENDING',
-        items: {
-          create: itemsData
-        },
-        logs: {
-          create: {
-            oldStatus: null,
-            newStatus: 'PLACED'
-          }
-        }
-      },
-      include: {
-        customer: true,
-        items: { include: { product: true } },
-        logs: true
-      }
-    });
+        payload.shippingInfo ? JSON.stringify(payload.shippingInfo) : null,
+        'PLACED',
+        payload.paymentId ?? null,
+        payload.paymentStatus ?? 'PENDING',
+      ]
+    );
+
+    for (const item of itemsData) {
+      await conn.execute(
+        `INSERT INTO order_items (id, orderId, productId, quantity, price) VALUES (?, ?, ?, ?, ?)`,
+        [randomUUID(), orderId, item.productId, item.quantity, Number(item.price)]
+      );
+    }
+    await conn.execute(
+      `INSERT INTO order_logs (id, orderId, oldStatus, newStatus) VALUES (?, ?, ?, ?)`,
+      [randomUUID(), orderId, null, 'PLACED']
+    );
 
     // Decrement stock for each ordered item (inside same transaction)
     for (const item of itemsData) {
-      await tx.product.update({
-        where: { id: item.productId },
-        data: { stock: { decrement: item.quantity } }
-      });
+      await conn.execute(
+        `UPDATE products SET stock = stock - ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+        [item.quantity, item.productId]
+      );
     }
 
-    return order;
+    return getOrderDetailsById(conn, orderId, store.id);
   }).then((order) => {
     setImmediate(() => {
       const customer = order.customer;
@@ -133,25 +141,33 @@ async function createOrderForStore(store, payload) {
 }
 
 async function listOrdersForStore(storeId, { page = 1, limit = 20, status } = {}) {
-  const where = { storeId, ...(status ? { status } : {}) };
+  const params = [storeId];
+  let whereSql = 'WHERE o.storeId = ?';
+  if (status) {
+    whereSql += ' AND o.status = ?';
+    params.push(status);
+  }
+  const offset = (page - 1) * limit;
 
-  const [orders, total] = await Promise.all([
-    prisma.order.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        customer: true,
-        items: { include: { product: true } },
-        logs: true
-      },
-      skip: (page - 1) * limit,
-      take: limit
-    }),
-    prisma.order.count({ where })
-  ]);
+  const orders = await query(
+    `SELECT o.*, c.name AS customer_name, c.phone AS customer_phone, c.email AS customer_email
+     FROM orders o
+     LEFT JOIN customers c ON c.id = o.customerId
+     ${whereSql}
+     ORDER BY o.createdAt DESC
+     LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+  const countRows = await query(
+    `SELECT COUNT(*) AS count FROM orders o ${whereSql}`,
+    params
+  );
+  const total = Number(countRows[0].count || 0);
+
+  const hydratedOrders = await hydrateOrders(orders);
 
   return {
-    orders,
+    orders: hydratedOrders,
     total,
     page,
     limit,
@@ -171,11 +187,27 @@ async function updateOrderStatusForStore(store, orderId, newStatus) {
     newStatus
   });
 
-  return prisma.$transaction(async (tx) => {
-    const order = await tx.order.findFirst({
-      where: { id: orderId, storeId: store.id },
-      include: { customer: true }
-    });
+  return withTransaction(async (conn) => {
+    const [rows] = await conn.execute(
+      `SELECT o.*, c.name AS customer_name, c.phone AS customer_phone, c.email AS customer_email
+       FROM orders o
+       LEFT JOIN customers c ON c.id = o.customerId
+       WHERE o.id = ? AND o.storeId = ?
+       LIMIT 1`,
+      [orderId, store.id]
+    );
+    const orderRow = rows[0];
+    const order = orderRow
+      ? {
+          ...orderRow,
+          customer: {
+            id: orderRow.customerId,
+            name: orderRow.customer_name,
+            phone: orderRow.customer_phone,
+            email: orderRow.customer_email,
+          },
+        }
+      : null;
 
     if (!order) throw new HttpError(404, 'Order not found');
 
@@ -184,19 +216,33 @@ async function updateOrderStatusForStore(store, orderId, newStatus) {
       throw new HttpError(400, `Cannot transition from ${oldStatus} to ${newStatus}`);
     }
 
-    const updated = await tx.order.update({
-      where: { id: order.id },
-      data: {
-        status: newStatus,
-        logs: {
-          create: {
-            oldStatus,
-            newStatus
-          }
-        }
+    await conn.execute(
+      `UPDATE orders SET status = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+      [newStatus, order.id]
+    );
+    await conn.execute(
+      `INSERT INTO order_logs (id, orderId, oldStatus, newStatus) VALUES (?, ?, ?, ?)`,
+      [randomUUID(), order.id, oldStatus, newStatus]
+    );
+
+    const [updatedRows] = await conn.execute(
+      `SELECT o.*, c.name AS customer_name, c.phone AS customer_phone, c.email AS customer_email
+       FROM orders o
+       LEFT JOIN customers c ON c.id = o.customerId
+       WHERE o.id = ?
+       LIMIT 1`,
+      [order.id]
+    );
+    const updatedRow = updatedRows[0];
+    const updated = {
+      ...updatedRow,
+      customer: {
+        id: updatedRow.customerId,
+        name: updatedRow.customer_name,
+        phone: updatedRow.customer_phone,
+        email: updatedRow.customer_email,
       },
-      include: { customer: true }
-    });
+    };
 
     setImmediate(() => {
       sendStatusUpdate(updated, updated.customer, newStatus, store.name).catch((err) =>
@@ -242,14 +288,7 @@ function normalizePhoneForCompare(phone) {
 }
 
 async function trackOrderForStore(store, orderId, phone) {
-  const order = await prisma.order.findFirst({
-    where: { id: orderId, storeId: store.id },
-    include: {
-      customer: true,
-      items: { include: { product: true } },
-      logs: { orderBy: { timestamp: 'asc' } }
-    }
-  });
+  const order = await getOrderDetailsById(null, orderId, store.id);
 
   if (!order) {
     throw new HttpError(404, 'Order not found. Please check your order ID and phone number.');
@@ -279,6 +318,128 @@ async function trackOrderForStore(store, orderId, phone) {
       newStatus: log.newStatus
     }))
   };
+}
+
+async function getOrderDetailsById(conn, orderId, storeId) {
+  const exec = conn ? conn.execute.bind(conn) : null;
+  const orderRows = exec
+    ? await exec(
+        `SELECT o.*, c.name AS customer_name, c.phone AS customer_phone, c.email AS customer_email
+         FROM orders o
+         LEFT JOIN customers c ON c.id = o.customerId
+         WHERE o.id = ? AND o.storeId = ?
+         LIMIT 1`,
+        [orderId, storeId]
+      ).then(([rows]) => rows)
+    : await query(
+        `SELECT o.*, c.name AS customer_name, c.phone AS customer_phone, c.email AS customer_email
+         FROM orders o
+         LEFT JOIN customers c ON c.id = o.customerId
+         WHERE o.id = ? AND o.storeId = ?
+         LIMIT 1`,
+        [orderId, storeId]
+      );
+  const row = orderRows[0];
+  if (!row) return null;
+
+  const itemsRows = exec
+    ? await exec(
+        `SELECT oi.*, p.name AS product_name, p.price AS product_price
+         FROM order_items oi
+         LEFT JOIN products p ON p.id = oi.productId
+         WHERE oi.orderId = ?
+         ORDER BY oi.createdAt ASC`,
+        [orderId]
+      ).then(([rows]) => rows)
+    : await query(
+        `SELECT oi.*, p.name AS product_name, p.price AS product_price
+         FROM order_items oi
+         LEFT JOIN products p ON p.id = oi.productId
+         WHERE oi.orderId = ?
+         ORDER BY oi.createdAt ASC`,
+        [orderId]
+      );
+
+  const logsRows = exec
+    ? await exec(
+        `SELECT * FROM order_logs WHERE orderId = ? ORDER BY timestamp ASC`,
+        [orderId]
+      ).then(([rows]) => rows)
+    : await query(
+        `SELECT * FROM order_logs WHERE orderId = ? ORDER BY timestamp ASC`,
+        [orderId]
+      );
+
+  return {
+    ...row,
+    shippingInfo: row.shippingInfo ? safeJsonParse(row.shippingInfo) : null,
+    customer: {
+      id: row.customerId,
+      name: row.customer_name,
+      phone: row.customer_phone,
+      email: row.customer_email,
+    },
+    items: itemsRows.map((item) => ({
+      ...item,
+      product: {
+        id: item.productId,
+        name: item.product_name,
+        price: item.product_price,
+      },
+    })),
+    logs: logsRows,
+  };
+}
+
+async function hydrateOrders(orders) {
+  if (!orders.length) return [];
+  const orderIds = orders.map((o) => o.id);
+  const items = await query(
+    `SELECT oi.*, p.name AS product_name, p.price AS product_price
+     FROM order_items oi
+     LEFT JOIN products p ON p.id = oi.productId
+     WHERE oi.orderId IN (${orderIds.map(() => '?').join(', ')})`,
+    orderIds
+  );
+  const logs = await query(
+    `SELECT * FROM order_logs WHERE orderId IN (${orderIds.map(() => '?').join(', ')})`,
+    orderIds
+  );
+
+  const itemMap = new Map();
+  const logMap = new Map();
+  for (const item of items) {
+    if (!itemMap.has(item.orderId)) itemMap.set(item.orderId, []);
+    itemMap.get(item.orderId).push({
+      ...item,
+      product: { id: item.productId, name: item.product_name, price: item.product_price },
+    });
+  }
+  for (const log of logs) {
+    if (!logMap.has(log.orderId)) logMap.set(log.orderId, []);
+    logMap.get(log.orderId).push(log);
+  }
+
+  return orders.map((order) => ({
+    ...order,
+    shippingInfo: order.shippingInfo ? safeJsonParse(order.shippingInfo) : null,
+    customer: {
+      id: order.customerId,
+      name: order.customer_name,
+      phone: order.customer_phone,
+      email: order.customer_email,
+    },
+    items: itemMap.get(order.id) || [],
+    logs: logMap.get(order.id) || [],
+  }));
+}
+
+function safeJsonParse(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 module.exports = {

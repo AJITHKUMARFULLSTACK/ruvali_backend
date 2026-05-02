@@ -8,9 +8,6 @@ function mustGet(name) {
   return v;
 }
 
-// --- DATABASE_URL: optional at startup; required for DB-backed routes ---
-const databaseUrl = (process.env.DATABASE_URL || '').trim();
-
 // --- ADMIN_JWT_SECRET: strict in production, warn in development ---
 const nodeEnv = process.env.NODE_ENV || 'development';
 const rawAdminJwtSecret = process.env.ADMIN_JWT_SECRET;
@@ -43,8 +40,6 @@ const env = {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
-
-  databaseUrl,
 
   adminJwtSecret,
   adminJwtExpiresIn: process.env.ADMIN_JWT_EXPIRES_IN || '7d',

@@ -18,6 +18,7 @@ const orderRoutes = require('./routes/orders.routes');
 const uploadRoutes = require('./routes/uploads.routes');
 const customerRoutes = require('./routes/customer.routes');
 const systemRoutes = require('./routes/system.routes');
+const devRoutes = require('./routes/dev.routes');
 
 const app = express();
 
@@ -67,6 +68,7 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/upload', uploadRoutes); // helper endpoint for admin panels
 app.use('/api/customer', customerRoutes);
+app.use('/api/dev', devRoutes); // TEMPORARY: remove after initial production seeding
 
 app.use(errorHandler);
 

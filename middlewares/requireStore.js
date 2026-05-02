@@ -1,4 +1,4 @@
-const { prisma } = require('../config/prisma');
+const { query } = require('../config/db');
 const { HttpError } = require('../utils/httpError');
 
 /**
@@ -12,7 +12,8 @@ async function requireStore(req, res, next) {
     const slug = (req.headers['x-store-slug'] || req.query.storeSlug || '').toString().trim();
     if (!slug) throw new HttpError(400, 'Missing store slug. Provide header `x-store-slug` or query `storeSlug`.');
 
-    const store = await prisma.store.findUnique({ where: { slug } });
+    const rows = await query('SELECT * FROM stores WHERE slug = ? LIMIT 1', [slug]);
+    const store = rows[0];
     if (!store) throw new HttpError(404, 'Store not found');
 
     req.store = store;

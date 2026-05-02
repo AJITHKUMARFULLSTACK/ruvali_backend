@@ -1,11 +1,12 @@
-const { prisma } = require('../config/prisma');
+const { randomUUID } = require('crypto');
+const { query } = require('../config/db');
 const { HttpError } = require('../utils/httpError');
 
 async function listCategoriesForStore(storeId) {
-  return prisma.category.findMany({
-    where: { storeId },
-    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
-  });
+  return query(
+    `SELECT * FROM categories WHERE storeId = ? ORDER BY sortOrder ASC, name ASC`,
+    [storeId]
+  );
 }
 
 async function createCategoryForStore(storeId, payload) {
@@ -13,19 +14,21 @@ async function createCategoryForStore(storeId, payload) {
   if (!name) {
     throw new HttpError(400, 'Category name is required');
   }
-  return prisma.category.create({
-    data: {
-      storeId,
-      name,
-      parentId: payload.parentId || null
-    }
-  });
+  const id = randomUUID();
+  await query(
+    `INSERT INTO categories (id, storeId, name, parentId) VALUES (?, ?, ?, ?)`,
+    [id, storeId, name, payload.parentId || null]
+  );
+  const rows = await query('SELECT * FROM categories WHERE id = ? LIMIT 1', [id]);
+  return rows[0];
 }
 
 async function updateCategoryForStore(storeId, categoryId, payload) {
-  const existing = await prisma.category.findFirst({
-    where: { id: categoryId, storeId }
-  });
+  const existingRows = await query(
+    'SELECT id FROM categories WHERE id = ? AND storeId = ? LIMIT 1',
+    [categoryId, storeId]
+  );
+  const existing = existingRows[0];
   if (!existing) {
     console.warn('[CATEGORIES:update] Category not found', { categoryId, storeId });
     throw new HttpError(404, 'Category not found');
@@ -36,26 +39,43 @@ async function updateCategoryForStore(storeId, categoryId, payload) {
   if (payload.bannerImage !== undefined) data.bannerImage = payload.bannerImage || null;
   if (payload.slug !== undefined) data.slug = payload.slug || null;
   if (payload.sortOrder !== undefined) data.sortOrder = payload.sortOrder;
-  return prisma.category.update({
-    where: { id: categoryId },
-    data
-  });
+  const keys = Object.keys(data);
+  if (keys.length > 0) {
+    const setClause = keys.map((k) => `${k} = ?`).join(', ');
+    const values = keys.map((k) => data[k]);
+    await query(
+      `UPDATE categories SET ${setClause}, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+      [...values, categoryId]
+    );
+  }
+  const rows = await query('SELECT * FROM categories WHERE id = ? LIMIT 1', [categoryId]);
+  return rows[0];
 }
 
 async function deleteCategoryForStore(storeId, categoryId) {
-  const existing = await prisma.category.findFirst({
-    where: { id: categoryId, storeId }
-  });
+  const existingRows = await query(
+    'SELECT id FROM categories WHERE id = ? AND storeId = ? LIMIT 1',
+    [categoryId, storeId]
+  );
+  const existing = existingRows[0];
   if (!existing) throw new HttpError(404, 'Category not found');
-  const hasProducts = await prisma.product.count({ where: { categoryId } }) > 0;
+  const productCountRows = await query(
+    'SELECT COUNT(*) AS count FROM products WHERE categoryId = ?',
+    [categoryId]
+  );
+  const hasProducts = Number(productCountRows[0].count) > 0;
   if (hasProducts) {
     throw new HttpError(400, 'Cannot delete: this category has products. Move or remove products first.');
   }
-  const hasChildren = await prisma.category.count({ where: { parentId: categoryId } }) > 0;
+  const childCountRows = await query(
+    'SELECT COUNT(*) AS count FROM categories WHERE parentId = ?',
+    [categoryId]
+  );
+  const hasChildren = Number(childCountRows[0].count) > 0;
   if (hasChildren) {
     throw new HttpError(400, 'Cannot delete: this category has subcategories. Delete subcategories first.');
   }
-  await prisma.category.delete({ where: { id: categoryId } });
+  await query('DELETE FROM categories WHERE id = ?', [categoryId]);
   return { deleted: true };
 }
 
@@ -65,10 +85,11 @@ async function reorderCategoriesForStore(storeId, categoryIds) {
   }
   await Promise.all(
     categoryIds.map((id, index) =>
-      prisma.category.updateMany({
-        where: { id, storeId },
-        data: { sortOrder: index }
-      })
+      query('UPDATE categories SET sortOrder = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND storeId = ?', [
+        index,
+        id,
+        storeId,
+      ])
     )
   );
   return listCategoriesForStore(storeId);

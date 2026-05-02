@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { prisma } = require('../config/prisma');
+const { randomUUID } = require('crypto');
+const { query } = require('../config/db');
 const { HttpError } = require('../utils/httpError');
 const { env } = require('../config/env');
 
@@ -17,38 +18,43 @@ async function registerCustomer(store, { name, email, phone, password }) {
     throw new HttpError(400, 'Password must be at least 8 characters');
   }
 
-  const existingByEmail = await prisma.customer.findFirst({
-    where: { storeId: store.id, email }
-  });
+  const existingByEmailRows = await query(
+    'SELECT id FROM customers WHERE storeId = ? AND email = ? LIMIT 1',
+    [store.id, email]
+  );
+  const existingByEmail = existingByEmailRows[0];
   if (existingByEmail) {
     throw new HttpError(409, 'An account with this email already exists');
   }
 
   const hashedPassword = await bcrypt.hash(password, 10);
 
-  const existingByPhone = await prisma.customer.findFirst({
-    where: { storeId: store.id, phone }
-  });
+  const existingByPhoneRows = await query(
+    'SELECT * FROM customers WHERE storeId = ? AND phone = ? LIMIT 1',
+    [store.id, phone]
+  );
+  const existingByPhone = existingByPhoneRows[0];
 
   let customer;
   if (existingByPhone) {
     if (existingByPhone.password) {
       throw new HttpError(409, 'Account already exists');
     }
-    customer = await prisma.customer.update({
-      where: { id: existingByPhone.id },
-      data: { email, password: hashedPassword }
-    });
+    await query('UPDATE customers SET email = ?, password = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?', [
+      email,
+      hashedPassword,
+      existingByPhone.id,
+    ]);
+    const updatedRows = await query('SELECT * FROM customers WHERE id = ? LIMIT 1', [existingByPhone.id]);
+    customer = updatedRows[0];
   } else {
-    customer = await prisma.customer.create({
-      data: {
-        storeId: store.id,
-        name,
-        email,
-        phone,
-        password: hashedPassword
-      }
-    });
+    const id = randomUUID();
+    await query(
+      `INSERT INTO customers (id, storeId, name, email, phone, password) VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, store.id, name, email, phone, hashedPassword]
+    );
+    const createdRows = await query('SELECT * FROM customers WHERE id = ? LIMIT 1', [id]);
+    customer = createdRows[0];
   }
 
   const token = jwt.sign(
@@ -69,9 +75,11 @@ async function registerCustomer(store, { name, email, phone, password }) {
 }
 
 async function loginCustomer(store, { email, password }) {
-  const customer = await prisma.customer.findFirst({
-    where: { storeId: store.id, email }
-  });
+  const rows = await query(
+    'SELECT * FROM customers WHERE storeId = ? AND email = ? LIMIT 1',
+    [store.id, email]
+  );
+  const customer = rows[0];
   if (!customer) {
     throw new HttpError(401, 'Invalid email or password');
   }
@@ -101,14 +109,37 @@ async function loginCustomer(store, { email, password }) {
 }
 
 async function getCustomerOrders(store, customerId) {
-  const orders = await prisma.order.findMany({
-    where: { customerId, storeId: store.id },
-    orderBy: { createdAt: 'desc' },
-    include: {
-      items: { include: { product: { select: { name: true, price: true } } } },
-      logs: { orderBy: { timestamp: 'asc' } }
-    }
-  });
+  const orders = await query(
+    `SELECT * FROM orders WHERE customerId = ? AND storeId = ? ORDER BY createdAt DESC`,
+    [customerId, store.id]
+  );
+  if (!orders.length) return [];
+
+  const orderIds = orders.map((o) => o.id);
+  const items = await query(
+    `SELECT oi.orderId, oi.quantity, oi.price, p.name AS product_name
+     FROM order_items oi
+     LEFT JOIN products p ON p.id = oi.productId
+     WHERE oi.orderId IN (${orderIds.map(() => '?').join(', ')})`,
+    orderIds
+  );
+  const logs = await query(
+    `SELECT orderId, timestamp, newStatus FROM order_logs
+     WHERE orderId IN (${orderIds.map(() => '?').join(', ')})
+     ORDER BY timestamp ASC`,
+    orderIds
+  );
+
+  const itemsMap = new Map();
+  const logsMap = new Map();
+  for (const i of items) {
+    if (!itemsMap.has(i.orderId)) itemsMap.set(i.orderId, []);
+    itemsMap.get(i.orderId).push(i);
+  }
+  for (const l of logs) {
+    if (!logsMap.has(l.orderId)) logsMap.set(l.orderId, []);
+    logsMap.get(l.orderId).push(l);
+  }
 
   return orders.map((o) => ({
     id: o.id,
@@ -117,12 +148,12 @@ async function getCustomerOrders(store, customerId) {
     shippingAmount: o.shippingAmount ?? 0,
     createdAt: o.createdAt,
     paymentStatus: o.paymentStatus ?? 'PENDING',
-    items: o.items.map((i) => ({
-      productName: i.product?.name,
+    items: (itemsMap.get(o.id) || []).map((i) => ({
+      productName: i.product_name,
       quantity: i.quantity,
       price: i.price
     })),
-    statusLog: o.logs.map((l) => ({
+    statusLog: (logsMap.get(o.id) || []).map((l) => ({
       timestamp: l.timestamp,
       newStatus: l.newStatus
     }))

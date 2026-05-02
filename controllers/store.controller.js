@@ -1,6 +1,6 @@
 const { asyncHandler } = require('../utils/asyncHandler');
 const { getStoreBySlug, updateStoreBranding } = require('../services/store.service');
-const { prisma } = require('../config/prisma');
+const { query } = require('../config/db');
 
 const getBySlug = asyncHandler(async (req, res) => {
   const { slug } = req.params;
@@ -31,13 +31,12 @@ const updateBranding = asyncHandler(async (req, res) => {
 const revalidate = asyncHandler(async (req, res) => {
   const storeId = req.adminUser.storeId;
 
-  const updated = await prisma.store.update({
-    where: { id: storeId },
-    data: {
-      // writing same name still bumps updatedAt
-      name: req.store.name
-    }
-  });
+  await query(
+    'UPDATE stores SET name = name, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+    [storeId]
+  );
+  const rows = await query('SELECT id, updatedAt FROM stores WHERE id = ? LIMIT 1', [storeId]);
+  const updated = rows[0];
 
   console.log('[STORE:revalidate]', {
     storeId,
