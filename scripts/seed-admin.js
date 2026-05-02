@@ -182,24 +182,8 @@ async function run() {
   }
 }
 
-async function runAdminSeed() {
-  try {
-    await run();
-    return { ok: true };
-  } catch (error) {
-    // Keep detailed logging server-side only
-    console.error('[seed] Failed:', error.message);
-    return { ok: false, error };
-  }
-}
-
-module.exports = { runAdminSeed };
-
-if (require.main === module) {
-  runAdminSeed().then((result) => {
-    if (!result.ok) {
-      process.exitCode = 1;
-    }
-  });
-}
+run().catch((error) => {
+  console.error('[seed] Failed:', error.message);
+  process.exitCode = 1;
+});
 
