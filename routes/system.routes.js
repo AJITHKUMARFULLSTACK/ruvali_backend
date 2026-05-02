@@ -19,7 +19,11 @@ router.get('/test-db', async (req, res, next) => {
       database: result,
     });
   } catch (error) {
-    next(error);
+    res.status(503).json({
+      status: 'error',
+      database: 'disconnected',
+      message: error.message || 'Database connection failed',
+    });
   }
 });
 

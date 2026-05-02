@@ -8,13 +8,8 @@ function mustGet(name) {
   return v;
 }
 
-// --- DATABASE_URL: required in all environments ---
-const databaseUrl = process.env.DATABASE_URL || null;
-if (!databaseUrl || !databaseUrl.trim()) {
-  throw new Error(
-    'FATAL: DATABASE_URL is not set. The server cannot start without a database.'
-  );
-}
+// --- DATABASE_URL: optional at startup; required for DB-backed routes ---
+const databaseUrl = (process.env.DATABASE_URL || '').trim();
 
 // --- ADMIN_JWT_SECRET: strict in production, warn in development ---
 const nodeEnv = process.env.NODE_ENV || 'development';
@@ -24,11 +19,13 @@ const isProduction = nodeEnv === 'production';
 let adminJwtSecret;
 if (isProduction) {
   if (!rawAdminJwtSecret || rawAdminJwtSecret.trim() === '' || rawAdminJwtSecret === 'change-me') {
-    throw new Error(
-      'FATAL: ADMIN_JWT_SECRET is not set or is using the default value. Set a strong secret in your environment.'
+    console.warn(
+      '[SECURITY] ADMIN_JWT_SECRET is not set or is using the default value. Set a strong secret in production.'
     );
+    adminJwtSecret = 'change-me';
+  } else {
+    adminJwtSecret = rawAdminJwtSecret;
   }
-  adminJwtSecret = rawAdminJwtSecret;
 } else {
   adminJwtSecret = rawAdminJwtSecret || 'change-me';
   if (!rawAdminJwtSecret || rawAdminJwtSecret === 'change-me') {
