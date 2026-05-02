@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 const { env } = require('./config/env');
+const { ensureProductUploadsDir } = require('./config/uploads');
 const { initWhatsApp } = require('./services/whatsapp.service');
 const { requestLogger } = require('./middlewares/requestLogger');
 const { errorHandler } = require('./middlewares/errorHandler');
@@ -20,6 +21,8 @@ const customerRoutes = require('./routes/customer.routes');
 const systemRoutes = require('./routes/system.routes');
 
 const app = express();
+
+ensureProductUploadsDir();
 
 // Build allowed origins: from CORS_ORIGINS, always include localhost:3000 in development
 const corsOrigins = [...env.corsOrigins];
@@ -55,6 +58,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use(morgan(env.nodeEnv === 'development' ? 'dev' : 'combined'));
 app.use(requestLogger);
 
+app.use('/uploads', express.static(path.join(__dirname, 'public', 'uploads')));
+// Legacy uploads folder (prior non-public path) — still served when present.
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.get('/health', (req, res) => res.json({ ok: true }));

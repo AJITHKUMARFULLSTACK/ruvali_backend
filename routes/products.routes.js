@@ -1,23 +1,57 @@
 const express = require('express');
-const { listPublic, getAdmin, listAdmin, create, update, remove } = require('../controllers/product.controller');
+const {
+  listPublic,
+  getAdmin,
+  listAdmin,
+  create,
+  update,
+  remove,
+  uploadProductImagesHandler,
+  patch,
+  optionalMultipartForPatch,
+  multipartCreateConditional,
+  assignProductUuidForMultipart,
+} = require('../controllers/product.controller');
 const { requireStore } = require('../middlewares/requireStore');
 const { authAdmin } = require('../middlewares/authAdmin');
+const { requireAdminStoreSlug } = require('../middlewares/requireAdminStoreSlug');
+const { uploadExistingProductImages } = require('../middlewares/productImagesMulter');
 
 const router = express.Router();
 
-// Public: GET /api/products?storeSlug=slug  OR header x-store-slug
+// Public (store scope from header/query)
 router.get('/', requireStore, listPublic);
 
-// Admin: GET /api/products/admin
-router.get('/admin', authAdmin, listAdmin);
+// Admin listings / bulk before :id routes
+router.get('/admin', authAdmin, requireAdminStoreSlug, listAdmin);
 
-// Admin: GET /api/products/:id
-router.get('/:id', authAdmin, getAdmin);
+router.post(
+  '/',
+  authAdmin,
+  requireAdminStoreSlug,
+  assignProductUuidForMultipart,
+  multipartCreateConditional,
+  create
+);
 
-// Admin CRUD
-router.post('/', authAdmin, create);
-router.put('/:id', authAdmin, update);
-router.delete('/:id', authAdmin, remove);
+router.post(
+  '/:id/images',
+  authAdmin,
+  requireAdminStoreSlug,
+  uploadExistingProductImages,
+  uploadProductImagesHandler
+);
+
+router.patch(
+  '/:id',
+  authAdmin,
+  requireAdminStoreSlug,
+  optionalMultipartForPatch,
+  patch
+);
+
+router.put('/:id', authAdmin, requireAdminStoreSlug, update);
+router.get('/:id', authAdmin, requireAdminStoreSlug, getAdmin);
+router.delete('/:id', authAdmin, requireAdminStoreSlug, remove);
 
 module.exports = router;
-

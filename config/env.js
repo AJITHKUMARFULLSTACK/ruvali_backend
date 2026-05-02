@@ -70,6 +70,10 @@ const env = {
     jwtExpiresIn: process.env.CUSTOMER_JWT_EXPIRES_IN || '30d'
   },
 
+  /** Public site URL (no trailing slash) for full image URLs in JSON responses */
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, ''),
+  maxUploadSizeMb: Math.min(50, Math.max(1, Number(process.env.MAX_UPLOAD_SIZE_MB || 5))),
+
   email: {
     host: process.env.EMAIL_HOST || 'smtp.gmail.com',
     port: parseInt(process.env.EMAIL_PORT || '587', 10),
