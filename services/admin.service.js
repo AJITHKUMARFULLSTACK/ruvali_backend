@@ -6,6 +6,7 @@ const { env } = require('../config/env');
 const { HttpError } = require('../utils/httpError');
 
 async function loginAdmin({ email, password }) {
+  const normalized = String(email || '').trim().toLowerCase();
   const rows = await query(
     `SELECT 
       a.id, a.email, a.password, a.storeId,
@@ -14,7 +15,7 @@ async function loginAdmin({ email, password }) {
      JOIN stores s ON s.id = a.storeId
      WHERE a.email = ?
      LIMIT 1`,
-    [email]
+    [normalized]
   );
   const admin = rows[0];
 
@@ -84,5 +85,44 @@ async function createInitialStoreAndAdmin({ store, admin }) {
   });
 }
 
-module.exports = { loginAdmin, createInitialStoreAndAdmin };
+/**
+ * Idempotent seed CLI: set or reset one admin's password (bcrypt 12 rounds).
+ * Does not duplicate admin rows; logs must never print password or hash.
+ *
+ * @returns {{ action: 'updated' | 'created'; adminId: string; storeId: string }}
+ */
+async function upsertSeedAdminCredentials({ email, plainPassword, storeSlug }) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail) throw new Error('email is required');
+
+  const hashed = await bcrypt.hash(plainPassword, 12);
+
+  const storeRows = await query('SELECT id FROM stores WHERE slug = ? LIMIT 1', [
+    String(storeSlug || 'ruvali').trim(),
+  ]);
+  if (!storeRows.length) {
+    throw new Error(
+      `No store found for slug "${storeSlug}". Insert a stores row first (e.g. slug=ruvali), then re-run this script.`
+    );
+  }
+
+  const storeId = storeRows[0].id;
+  const rows = await query('SELECT id FROM admin_users WHERE email = ? LIMIT 1', [normalizedEmail]);
+
+  if (rows[0]) {
+    await query('UPDATE admin_users SET password = ? WHERE id = ?', [hashed, rows[0].id]);
+    return { action: 'updated', adminId: rows[0].id, storeId };
+  }
+
+  const adminId = randomUUID();
+  await query('INSERT INTO admin_users (id, email, password, storeId) VALUES (?, ?, ?, ?)', [
+    adminId,
+    normalizedEmail,
+    hashed,
+    storeId,
+  ]);
+  return { action: 'created', adminId, storeId };
+}
+
+module.exports = { loginAdmin, createInitialStoreAndAdmin, upsertSeedAdminCredentials };
 
