@@ -4,6 +4,7 @@ const { env } = require('../config/env');
 
 const UPLOAD_SEGMENT = `/uploads/products`;
 const CATEGORY_UPLOAD_SEGMENT = `/uploads/categories`;
+const STORE_UPLOAD_SEGMENT = `/uploads/store`;
 
 /** Absolute directory for product images (filesystem). Exported for multer. */
 function getProductUploadsDir() {
@@ -12,6 +13,10 @@ function getProductUploadsDir() {
 
 function getCategoryUploadsDir() {
   return path.join(__dirname, '..', 'public', 'uploads', 'categories');
+}
+
+function getStoreAssetsDir() {
+  return path.join(__dirname, '..', 'public', 'uploads', 'store');
 }
 
 /**
@@ -131,7 +136,7 @@ function resolveCategoryBannerPath(bannerUrl) {
   return path.join(getCategoryUploadsDir(), fileName);
 }
 
-/** Delete disk file only for paths under our category uploads (not Cloudinary/external). */
+/** Delete disk file only for paths under our category uploads (skip external CDN URLs). */
 function deleteCategoryBannerIfExists(bannerUrl) {
   try {
     if (!bannerUrl || typeof bannerUrl !== 'string') return;
@@ -158,11 +163,48 @@ function enrichCategoryForApi(cat) {
   };
 }
 
+/** Store branding uploads (logo, background): relative path stored in DB, e.g. /uploads/store/foo.jpg */
+function toPublicStoreAssetUrl(fileName) {
+  const base = path.basename(fileName);
+  if (!base || base.includes('..')) {
+    throw new Error('Invalid file name');
+  }
+  return `${STORE_UPLOAD_SEGMENT}/${base}`;
+}
+
+function deleteStoreAssetIfExists(assetUrl) {
+  try {
+    if (!assetUrl || typeof assetUrl !== 'string') return;
+    if (!assetUrl.startsWith(`${STORE_UPLOAD_SEGMENT}/`)) return;
+    const normalized = assetUrl.trim().replace(/\\/g, '/');
+    if (normalized.includes('..')) return;
+    const fileName = path.basename(normalized);
+    if (
+      !fileName ||
+      fileName !== normalized.slice(STORE_UPLOAD_SEGMENT.length + 1)
+    ) {
+      return;
+    }
+    const abs = path.join(getStoreAssetsDir(), fileName);
+    if (fs.existsSync(abs)) {
+      fs.unlinkSync(abs);
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn('[uploads] Store asset missing on disk, skipping delete:', assetUrl);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[uploads] Could not delete store asset file:', assetUrl, err.message);
+  }
+}
+
 module.exports = {
   UPLOAD_SEGMENT,
   CATEGORY_UPLOAD_SEGMENT,
+  STORE_UPLOAD_SEGMENT,
   getProductUploadsDir,
   getCategoryUploadsDir,
+  getStoreAssetsDir,
   toPublicUploadUrl,
   resolveUploadPath,
   deleteFileIfExists,
@@ -170,6 +212,8 @@ module.exports = {
   toPublicCategoryBannerUrl,
   resolveCategoryBannerPath,
   deleteCategoryBannerIfExists,
+  toPublicStoreAssetUrl,
+  deleteStoreAssetIfExists,
   toFullImageUrl,
   mapImageRowForApi,
   enrichCategoryForApi,

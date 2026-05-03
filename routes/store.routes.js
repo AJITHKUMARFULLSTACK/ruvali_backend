@@ -1,17 +1,20 @@
 const express = require('express');
-const { getBySlug, updateBranding, revalidate } = require('../controllers/store.controller');
+const {
+  getBySlug,
+  updateBranding,
+  revalidate,
+  uploadBrandingAsset,
+} = require('../controllers/store.controller');
 const { authAdmin } = require('../middlewares/authAdmin');
 
 const router = express.Router();
 
-// GET /api/store/:slug
-router.get('/:slug', getBySlug);
+// Admin-only uploads must register before GET /:slug
+router.post('/asset', authAdmin, ...uploadBrandingAsset);
 
-// PUT /api/store (admin only, uses JWT + admin store)
-router.put('/', authAdmin, updateBranding);
-
-// POST /api/store/revalidate (admin only) – bump updatedAt for polling
 router.post('/revalidate', authAdmin, revalidate);
+router.put('/', authAdmin, updateBranding);
+router.get('/:slug', getBySlug);
 
 module.exports = router;
 

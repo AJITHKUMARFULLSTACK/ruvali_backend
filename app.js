@@ -16,11 +16,11 @@ const storeRoutes = require('./routes/store.routes');
 const productRoutes = require('./routes/products.routes');
 const categoryRoutes = require('./routes/categories.routes');
 const orderRoutes = require('./routes/orders.routes');
-const uploadRoutes = require('./routes/uploads.routes');
 const customerRoutes = require('./routes/customer.routes');
 const systemRoutes = require('./routes/system.routes');
 
 const app = express();
+app.set('trust proxy', 1); // Behind Hostinger/nginx so rate-limit respects X-Forwarded-For safely
 
 ensureUploadDirs();
 
@@ -58,6 +58,14 @@ app.use(express.urlencoded({ extended: true }));
 app.use(morgan(env.nodeEnv === 'development' ? 'dev' : 'combined'));
 app.use(requestLogger);
 
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'ruvali-backend',
+    health: '/api/health',
+  });
+});
+
 app.use('/uploads', express.static(path.join(__dirname, 'public', 'uploads')));
 // Legacy uploads folder (prior non-public path) — still served when present.
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -70,7 +78,6 @@ app.use('/api/store', storeRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/orders', orderRoutes);
-app.use('/api/upload', uploadRoutes); // helper endpoint for admin panels
 app.use('/api/customer', customerRoutes);
 
 app.use(errorHandler);

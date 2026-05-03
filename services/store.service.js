@@ -1,5 +1,6 @@
 const { query } = require('../config/db');
 const { HttpError } = require('../utils/httpError');
+const { deleteStoreAssetIfExists } = require('../utils/fileUrl');
 
 async function getStoreBySlug(slug) {
   const rows = await query('SELECT * FROM stores WHERE slug = ? LIMIT 1', [slug]);
@@ -9,6 +10,13 @@ async function getStoreBySlug(slug) {
 }
 
 async function updateStoreBranding(storeId, payload) {
+  const existingRows = await query(
+    'SELECT logo, backgroundImage FROM stores WHERE id = ? LIMIT 1',
+    [storeId]
+  );
+  const previous = existingRows[0];
+  if (!previous) throw new HttpError(404, 'Store not found');
+
   const data = {
     name: payload.name,
     logo: payload.logo,
@@ -21,6 +29,17 @@ async function updateStoreBranding(storeId, payload) {
   };
 
   Object.keys(data).forEach((k) => data[k] === undefined && delete data[k]);
+
+  if ('logo' in data && previous.logo && data.logo !== previous.logo) {
+    deleteStoreAssetIfExists(previous.logo);
+  }
+  if (
+    'backgroundImage' in data &&
+    previous.backgroundImage &&
+    data.backgroundImage !== previous.backgroundImage
+  ) {
+    deleteStoreAssetIfExists(previous.backgroundImage);
+  }
 
   const keys = Object.keys(data);
   if (keys.length === 0) {

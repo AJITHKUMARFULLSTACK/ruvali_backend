@@ -1,7 +1,7 @@
 const { HttpError } = require('../utils/httpError');
 
 function errorHandler(err, req, res, next) {
-  // Prisma errors often have .code; keep response safe.
+  // DB / driver errors may expose low-level codes; responses stay generic unless HttpError has details.
   const status = err instanceof HttpError ? err.status : 500;
   const isDev = process.env.NODE_ENV === 'development';
   const userMessage = status === 500 && !isDev ? 'Internal Server Error' : err.message;
